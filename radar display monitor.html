@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ESP32 Radar Monitor</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #060f06; color: #00ff50; font-family: 'Courier New', monospace; display: flex; flex-direction: column; align-items: center; min-height: 100vh; padding: 24px 16px; }
+  h1 { font-size: 15px; letter-spacing: 0.2em; color: rgba(0,255,80,0.7); margin-bottom: 18px; text-transform: uppercase; }
+  canvas { display: block; border-radius: 50% 50% 0 0 / 100% 100% 0 0; }
+  #hud { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 14px; }
+  .stat { background: #0a180a; border: 0.5px solid rgba(0,255,80,0.2); border-radius: 8px; padding: 10px 18px; text-align: center; min-width: 110px; }
+  .stat-label { font-size: 10px; color: rgba(0,255,80,0.5); letter-spacing: 0.1em; margin-bottom: 4px; }
+  .stat-value { font-size: 20px; font-weight: bold; color: #00ff50; }
+  .stat-value.alert { color: #ff3c3c; }
+  #controls { display: flex; gap: 16px; justify-content: center; margin-top: 14px; align-items: center; flex-wrap: wrap; }
+  label { font-size: 11px; color: rgba(0,255,80,0.6); }
+  input[type=range] { width: 100px; accent-color: #00ff50; }
+  button { font-size: 11px; padding: 6px 18px; background: transparent; color: #00ff50; border: 0.5px solid rgba(0,255,80,0.4); border-radius: 6px; cursor: pointer; letter-spacing: 0.1em; }
+  button:hover { background: rgba(0,255,80,0.08); }
+  #serial-box { margin-top: 14px; width: 100%; max-width: 560px; background: #020802; border: 0.5px solid rgba(0,255,80,0.15); border-radius: 8px; padding: 10px 14px; height: 72px; overflow: hidden; }
+  .log-line { font-size: 11px; color: #00cc44; line-height: 1.7; }
+  #how { margin-top: 28px; max-width: 560px; width: 100%; background: #0a180a; border: 0.5px solid rgba(0,255,80,0.15); border-radius: 10px; padding: 18px 20px; }
+  #how h2 { font-size: 12px; letter-spacing: 0.15em; color: rgba(0,255,80,0.6); margin-bottom: 12px; }
+  #how p, #how li { font-size: 12px; color: rgba(0,255,80,0.55); line-height: 1.8; }
+  #how ol { padding-left: 18px; }
+  #how code { background: rgba(0,255,80,0.08); padding: 1px 6px; border-radius: 4px; font-size: 11px; }
+  #port-bar { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; }
+  #port-bar select, #port-bar button { font-size: 11px; background: transparent; color: #00ff50; border: 0.5px solid rgba(0,255,80,0.3); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+  #serial-status { font-size: 10px; color: rgba(0,255,80,0.4); }
+</style>
+</head>
+<body>
+
+<h1>ESP32 Radar Monitor</h1>
+<canvas id="radar" width="560" height="340"></canvas>
+
+<div id="hud">
+  <div class="stat"><div class="stat-label">ANGLE</div><div class="stat-value" id="s-angle">0°</div></div>
+  <div class="stat"><div class="stat-label">DISTANCE</div><div class="stat-value" id="s-dist">— cm</div></div>
+  <div class="stat"><div class="stat-label">STATUS</div><div class="stat-value" id="s-status">Scanning</div></div>
+  <div class="stat"><div class="stat-label">BUZZ VOL</div><div class="stat-value" id="s-vol">—</div></div>
+</div>
+
+<div id="controls">
+  <label>Range (cm): <span id="lbl-range">100</span>
+    <input type="range" id="sl-range" min="20" max="200" value="100" step="1">
+  </label>
+  <label>Speed: <span id="lbl-speed">2</span>°/tick
+    <input type="range" id="sl-speed" min="1" max="6" value="2" step="1">
+  </label>
+  <button id="btn-pause">Pause</button>
+  <button id="btn-serial" title="Connect real ESP32 via Web Serial">Connect ESP32</button>
+</div>
+
+<div id="serial-box">
+  <div id="port-bar">
+    <span id="serial-status">Simulation mode — connect ESP32 for live data</span>
+  </div>
+  <div id="log"></div>
+</div>
+
+<div id="how">
+  <h2>HOW TO USE THIS FILE</h2>
+  <ol>
+    <li>Open this file in <strong>Google Chrome</strong> or <strong>Microsoft Edge</strong> (required for Web Serial).</li>
+    <li>Upload <code>radar_esp32.ino</code> to your ESP32 using Arduino IDE.</li>
+    <li>Connect your ESP32 via USB.</li>
+    <li>Click <strong>Connect ESP32</strong> above and select the correct COM port.</li>
+    <li>The radar will switch from simulation to live data automatically.</li>
+    <li>If you just want to preview the radar without hardware, it runs in simulation mode by default.</li>
+  </ol>
+  <p style="margin-top:10px;">Serial format expected from ESP32: <code>ANGLE:90,DIST:45</code> at 115200 baud.</p>
+</div>
+
+<script>
+const canvas = document.getElementById('radar');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+const CX = W / 2, CY = H - 30;
+const R = 280;
+
+let angle = 0, dir = 1, running = true;
+let maxRange = 100, sweepSpeed = 2;
+let blips = [];
+let logLines = [];
+let liveMode = false;
+let liveAngle = 0, liveDist = null;
+
+let simObjects = [];
+function randObjects() {
+  simObjects = [];
+  for (let i = 0; i < 5; i++) {
+    simObjects.push({ ang: Math.random() * 180, dist: 15 + Math.random() * 82, w: 8 + Math.random() * 18 });
+  }
+}
+randObjects();
+
+function getSimDist(a) {
+  for (let o of simObjects) {
+    if (Math.abs(a - o.ang) < o.w / 2) return Math.round(o.dist * maxRange / 100);
+  }
+  return null;
+}
+
+function polar(deg, r) {
+  const rad = (deg * Math.PI) / 180;
+  return { x: CX + r * Math.cos(Math.PI - rad), y: CY - r * Math.sin(Math.PI - rad) };
+}
+
+function drawRadar() {
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#050f05';
+  ctx.beginPath();
+  ctx.arc(CX, CY, R + 2, Math.PI, 2 * Math.PI);
+  ctx.closePath();
+  ctx.fill();
+
+  for (let i = 1; i <= 4; i++) {
+    const r = (R / 4) * i;
+    ctx.beginPath();
+    ctx.arc(CX, CY, r, Math.PI, 2 * Math.PI);
+    ctx.strokeStyle = 'rgba(0,200,60,0.18)';
+    ctx.lineWidth = 0.8;
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(0,200,60,0.45)';
+    ctx.font = '10px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(Math.round(maxRange * i / 4) + 'cm', CX + r + 18, CY - 4);
+  }
+
+  for (let a = 0; a <= 180; a += 30) {
+    const p = polar(a, R);
+    ctx.beginPath(); ctx.moveTo(CX, CY); ctx.lineTo(p.x, p.y);
+    ctx.strokeStyle = 'rgba(0,200,60,0.12)'; ctx.lineWidth = 0.6; ctx.stroke();
+    const pl = polar(a, R + 14);
+    ctx.fillStyle = 'rgba(0,200,60,0.55)';
+    ctx.font = '10px monospace'; ctx.textAlign = 'center';
+    ctx.fillText(a + '°', pl.x, pl.y + 4);
+  }
+
+  for (let b of blips) {
+    const p = polar(b.ang, b.dist * R / maxRange);
+    const age = (Date.now() - b.ts) / 2400;
+    const alpha = Math.max(0, 1 - age);
+    const sz = b.alert ? 7 : 4;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, sz, 0, Math.PI * 2);
+    ctx.fillStyle = b.alert ? `rgba(255,60,60,${alpha})` : `rgba(0,255,80,${alpha * 0.7})`;
+    ctx.fill();
+    if (b.alert) {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, sz + 12 * (1 - alpha), 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(255,60,60,${alpha * 0.35})`; ctx.lineWidth = 1; ctx.stroke();
+    }
+  }
+
+  const sweepAng = liveMode ? liveAngle : angle;
+  for (let trail = 20; trail >= 0; trail--) {
+    const ta = sweepAng - dir * trail;
+    const p1 = polar(ta, R);
+    ctx.beginPath(); ctx.moveTo(CX, CY); ctx.lineTo(p1.x, p1.y);
+    ctx.strokeStyle = `rgba(0,255,80,${(1 - trail / 20) * 0.22})`; ctx.lineWidth = 2; ctx.stroke();
+  }
+  const sp = polar(sweepAng, R);
+  ctx.beginPath(); ctx.moveTo(CX, CY); ctx.lineTo(sp.x, sp.y);
+  ctx.strokeStyle = 'rgba(0,255,80,0.95)'; ctx.lineWidth = 2; ctx.stroke();
+  ctx.beginPath(); ctx.arc(CX, CY, 5, 0, Math.PI * 2);
+  ctx.fillStyle = '#00ff50'; ctx.fill();
+
+  ctx.fillStyle = liveMode ? '#00ff50' : 'rgba(0,200,60,0.45)';
+  ctx.font = 'bold 11px monospace'; ctx.textAlign = 'left';
+  ctx.fillText(liveMode ? 'LIVE — ESP32' : 'SIMULATION', 20, H - 10);
+  ctx.textAlign = 'right'; ctx.fillStyle = 'rgba(0,200,60,0.45)';
+  ctx.fillText('ESP32 RADAR v1.0', W - 20, H - 10);
+}
+
+function buzz(dist) {
+  try {
+    const ac = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ac.createOscillator();
+    const gain = ac.createGain();
+    osc.connect(gain); gain.connect(ac.destination);
+    osc.frequency.value = Math.round(500 + (1 - dist / maxRange) * 3500);
+    gain.gain.value = 0.02 + (1 - dist / maxRange) * 0.28;
+    osc.start();
+    osc.stop(ac.currentTime + 0.05 + (1 - dist / maxRange) * 0.1);
+  } catch(e) {}
+}
+
+function addLog(msg) {
+  logLines.push(msg);
+  if (logLines.length > 4) logLines.shift();
+  document.getElementById('log').innerHTML = logLines.map(l => `<div class="log-line">${l}</div>`).join('');
+}
+
+let lastBuzz = 0;
+
+function tick() {
+  if (!liveMode) {
+    if (running) {
+      angle += dir * sweepSpeed;
+      if (angle >= 180) { angle = 180; dir = -1; }
+      if (angle <= 0)   { angle = 0;   dir = 1; }
+    }
+  }
+
+  const curAngle = liveMode ? liveAngle : angle;
+  const dist = liveMode ? liveDist : getSimDist(curAngle);
+  const detected = dist !== null && dist <= maxRange;
+
+  if (detected) {
+    blips.push({ ang: curAngle, dist, ts: Date.now(), alert: dist < maxRange * 0.3 });
+    const now = Date.now();
+    const gap = Math.round(50 + (dist / maxRange) * 350);
+    if (now - lastBuzz > gap) { buzz(dist); lastBuzz = now; }
+  }
+
+  blips = blips.filter(b => Date.now() - b.ts < 2500);
+
+  document.getElementById('s-angle').textContent = Math.round(curAngle) + '°';
+  document.getElementById('s-dist').textContent = detected ? dist + ' cm' : '— cm';
+  const statusEl = document.getElementById('s-status');
+  if (detected) {
+    statusEl.textContent = dist < maxRange * 0.3 ? 'CLOSE!' : 'Detected';
+    statusEl.className = 'stat-value' + (dist < maxRange * 0.3 ? ' alert' : '');
+  } else {
+    statusEl.textContent = 'Scanning';
+    statusEl.className = 'stat-value';
+  }
+  document.getElementById('s-vol').textContent = detected ? Math.round((1 - dist / maxRange) * 100) + '%' : '—';
+
+  if (detected && Math.round(curAngle) % 5 === 0) {
+    const ts = new Date().toISOString().substr(11, 8);
+    addLog(`[${ts}]  ANGLE:${Math.round(curAngle)}  DIST:${dist}cm`);
+  }
+
+  drawRadar();
+  requestAnimationFrame(tick);
+}
+
+document.getElementById('sl-range').addEventListener('input', function() {
+  maxRange = +this.value;
+  document.getElementById('lbl-range').textContent = maxRange;
+  randObjects();
+});
+document.getElementById('sl-speed').addEventListener('input', function() {
+  sweepSpeed = +this.value;
+  document.getElementById('lbl-speed').textContent = sweepSpeed;
+});
+document.getElementById('btn-pause').addEventListener('click', function() {
+  running = !running;
+  this.textContent = running ? 'Pause' : 'Resume';
+});
+
+let serialBuffer = '';
+document.getElementById('btn-serial').addEventListener('click', async function() {
+  if (!('serial' in navigator)) {
+    alert('Web Serial is only supported in Chrome or Edge. Please open this file in Chrome.');
+    return;
+  }
+  try {
+    const port = await navigator.serial.requestPort();
+    await port.open({ baudRate: 115200 });
+    liveMode = true;
+    document.getElementById('serial-status').textContent = 'Connected — reading live ESP32 data';
+    document.getElementById('btn-serial').textContent = 'Connected';
+    document.getElementById('btn-serial').disabled = true;
+    const decoder = new TextDecoderStream();
+    port.readable.pipeTo(decoder.writable);
+    const reader = decoder.readable.getReader();
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      serialBuffer += value;
+      const lines = serialBuffer.split('\n');
+      serialBuffer = lines.pop();
+      for (let line of lines) {
+        line = line.trim();
+        const m = line.match(/ANGLE:(\d+),DIST:(\d+)/);
+        if (m) {
+          liveAngle = parseInt(m[1]);
+          liveDist = parseInt(m[2]) > maxRange ? null : parseInt(m[2]);
+          addLog('[LIVE]  ' + line);
+        }
+      }
+    }
+  } catch(e) {
+    document.getElementById('serial-status').textContent = 'Connection failed — running in simulation mode';
+    liveMode = false;
+  }
+});
+
+tick();
+</script>
+</body>
+</html>
