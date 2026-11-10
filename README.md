@@ -173,6 +173,20 @@ This project is released for open use. No restrictions apply.
 
 ---
 
+## Skills & technologies
+
+[![C++](https://img.shields.io/badge/C%2B%2B-00599C?logo=cplusplus&logoColor=white)](https://github.com/NirmalyaLenka/radar-using-ultrasonic-sensor) · [![HTML5](https://img.shields.io/badge/HTML5-E34F26?logo=html5&logoColor=white)](https://github.com/NirmalyaLenka/radar-using-ultrasonic-sensor)
+
+
+## Repository structure
+
+Key files and folders (not an exhaustive listing):
+
+- `README.md`
+- `radar display monitor.html`
+- `radar esp32 .ino`
+
+
 ## Maintenance & Audit
 
 - **Audit date:** 10 November 2026
