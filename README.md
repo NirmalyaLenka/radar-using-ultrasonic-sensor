@@ -1,196 +1,137 @@
-# ESP32 Radar System
+# ESP32 Ultrasonic Radar
 
-## Overview
+[![Platform](https://img.shields.io/badge/Platform-ESP32-00979D?logo=espressif&logoColor=white)](https://www.espressif.com/en/products/socs/esp32)
+[![Firmware](https://img.shields.io/badge/Firmware-Arduino%20C%2B%2B-00599C?logo=arduino&logoColor=white)](https://docs.arduino.cc/)
+[![Display](https://img.shields.io/badge/Display-HTML5%20%2B%20Canvas-E34F26?logo=html5&logoColor=white)](https://developer.mozilla.org/en-US/docs/Web/API/Canvas_API)
 
-This project builds a sweeping radar using an ESP32, a servo motor, an HC-SR04 ultrasonic sensor, and a passive buzzer. The servo rotates the sensor from 0 to 180 degrees continuously. At each angle the sensor measures the distance to any object ahead. If an object is detected within the set range, the buzzer sounds. Objects that are closer produce a louder, higher-pitched, faster beeping tone. Objects that are farther away produce a quieter, lower-pitched, slower beeping tone. All angle and distance data is also printed to the Serial Monitor for logging or use with a visual radar display.
+A small ESP32 project that sweeps an HC-SR04 ultrasonic sensor across a servo's horizontal arc, reports angle/distance readings over serial, and changes a passive buzzer's tone and duty cycle when an object is within the configured range. A standalone browser page provides a simulated radar view and can read the ESP32 serial stream through the Web Serial API.
 
----
+This is a learning prototype, not a safety-rated detection system or a true radio-frequency radar. Ultrasonic measurements depend on target shape, angle, surface and environment.
 
-## Hardware Required
+## Features
 
-- ESP32 development board
-- HC-SR04 ultrasonic sensor
-- SG90 or MG90S servo motor
-- Passive buzzer (not active buzzer)
-- Jumper wires
-- External 5V power supply or powered breadboard for servo (recommended)
-- USB cable for programming
+- Servo sweep between approximately 0° and 180°.
+- HC-SR04 distance measurement with a 30 ms echo timeout and a 200 cm fallback value.
+- Serial records in the format `ANGLE:<degrees>,DIST:<cm>`.
+- Distance-dependent passive-buzzer frequency, duty cycle and beep interval.
+- Browser radar visualization with simulation mode, pause/resume, range/speed controls and optional live serial input.
+- No external JavaScript framework or remote asset is required by the HTML page.
 
-Note: Use a passive buzzer, not an active one. An active buzzer produces only a fixed tone and cannot vary in frequency or volume the way this project requires.
+## Repository files
 
----
+The filenames below are the actual names currently stored in the repository, including spaces.
 
-## Pin Connections
+| File | Purpose |
+|---|---|
+| [`radar esp32 .ino`](./radar%20esp32%20.ino) | ESP32 firmware for the servo, ultrasonic sensor, buzzer and serial output |
+| [`radar display monitor.html`](./radar%20display%20monitor.html) | Browser radar display; supports simulated data and live ESP32 serial input |
+| [`README.md`](./README.md) | Wiring, setup, limitations and maintenance notes |
 
-| Component        | Pin      | ESP32 Pin | Description            |
-|------------------|----------|-----------|------------------------|
-| HC-SR04          | VCC      | 5V        | Sensor power           |
-| HC-SR04          | GND      | GND       | Ground                 |
-| HC-SR04          | TRIG     | GPIO 5    | Trigger pulse output   |
-| HC-SR04          | ECHO     | GPIO 18   | Echo pulse input       |
-| Servo Motor      | VCC      | 5V        | Servo power            |
-| Servo Motor      | GND      | GND       | Ground                 |
-| Servo Motor      | Signal   | GPIO 13   | PWM control signal     |
-| Passive Buzzer   | Positive | GPIO 14   | PWM tone output        |
-| Passive Buzzer   | Negative | GND       | Ground                 |
+## Hardware and bill of materials
 
-Important: Power the servo from an external 5V supply or a powered rail rather than directly from the ESP32 3.3V pin. Servo motors draw more current than the ESP32 can safely provide and may cause resets or erratic behavior if underpowered.
+| Item | Status | Notes |
+|---|---|---|
+| ESP32 development board | Required | Arduino-compatible board with GPIO 5, 13, 14 and 18 available |
+| HC-SR04 ultrasonic module | Required | Powered from 5 V in the documented wiring |
+| SG90/MG90S-compatible servo | Required | Confirm the servo's voltage/current requirements |
+| Passive piezo buzzer | Required for the documented variable-tone behavior | An active buzzer generally cannot reproduce the firmware's changing pitch as intended |
+| Regulated 5 V supply for the servo | Strongly recommended | Size it for the servo's stall/startup current; do not power the servo from the ESP32 3.3 V pin |
+| 1 kΩ and 2 kΩ resistors, or a suitable logic-level shifter | Required for direct HC-SR04-to-ESP32 ECHO wiring | Forms a divider to reduce the nominal 5 V ECHO signal to about 3.3 V |
+| Jumper wires and common ground | Required | Join ESP32, sensor and servo supply grounds |
+| USB data cable | Required for programming and live serial display | A charge-only cable will not provide serial data |
 
----
+The resistor values above are one practical divider option, not a precision component requirement. A dedicated 5 V-to-3.3 V logic-level shifter is also suitable.
 
-## How It Works
+## Wiring
 
-The servo sweeps the ultrasonic sensor back and forth between 0 and 180 degrees, stepping one degree at a time. At each position the HC-SR04 fires a 10-microsecond ultrasonic pulse and listens for the echo. The time taken for the echo to return is converted to a distance in centimeters using the formula: distance = duration x 0.034 / 2.
+| Component pin | Connect to | Notes |
+|---|---|---|
+| HC-SR04 VCC | Regulated 5 V | Sensor supply |
+| HC-SR04 GND | Common GND | Must connect to ESP32 GND |
+| HC-SR04 TRIG | ESP32 GPIO 5 | Trigger output |
+| HC-SR04 ECHO | ESP32 GPIO 18 **through a divider/level shifter** | Do not connect the nominal 5 V ECHO output directly to the ESP32 |
+| Servo signal | ESP32 GPIO 13 | Control signal |
+| Servo VCC | Appropriate regulated servo supply, typically 5 V | Separate supply recommended |
+| Servo GND | Common GND | Grounds must be shared |
+| Passive buzzer + | ESP32 GPIO 14, if the buzzer is a low-current piezo type | Use a transistor driver if the buzzer's current exceeds safe GPIO limits |
+| Passive buzzer − | GND | Common ground |
 
-If the measured distance falls within the detection range (default 100 cm), the buzzer is triggered. The ESP32 LEDC peripheral generates a PWM signal on the buzzer pin. Both the frequency and the duty cycle (volume) are mapped inversely to the distance:
+**Important electrical safety:** ESP32 GPIOs are not 5 V tolerant. The HC-SR04 ECHO line is typically 5 V logic when the sensor is powered from 5 V; level-shift it before GPIO 18. Do not connect the servo's power rail to the ESP32 3.3 V output. If using a separate servo supply, connect its ground to the ESP32 ground so the signal has a reference.
 
-- At close range: high frequency (4000 Hz), high duty cycle (loud), short gap between beeps (fast).
-- At far range: low frequency (500 Hz), low duty cycle (quiet), long gap between beeps (slow).
+## Software requirements
 
-The current angle and distance are also sent over Serial in the format ANGLE:90,DIST:45 so they can be read by a serial plotter, a Processing sketch, or a web-based radar visualizer.
+- Arduino IDE and ESP32 board support.
+- The **ESP32Servo** library.
+- A compatible Arduino-ESP32 core version.
 
----
+The firmware uses the legacy LEDC functions `ledcSetup()`, `ledcAttachPin()` and `ledcChangeFrequency()`, which are from the Arduino-ESP32 2.x API. Arduino-ESP32 3.x changed the LEDC API, so this sketch may need a code migration before it will compile with core 3.x. The repository does not pin a toolchain or include a build workflow.
 
-## Buzzer Behavior by Distance
+For live browser input, use a Chromium-based browser such as Google Chrome or Microsoft Edge with Web Serial support. Browser support and secure-context rules can vary; if opening the local file does not expose Web Serial, serve the folder from `localhost` and reopen the page.
 
-| Distance      | Frequency | Volume  | Beep Speed |
-|---------------|-----------|---------|------------|
-| 0 to 20 cm    | ~4000 Hz  | Loud    | Very fast  |
-| 20 to 50 cm   | ~2500 Hz  | Medium  | Fast       |
-| 50 to 80 cm   | ~1200 Hz  | Quiet   | Slow       |
-| 80 to 100 cm  | ~500 Hz   | Faint   | Very slow  |
-| Above 100 cm  | Off       | Silent  | No beep    |
+## Setup
 
----
+### 1. Preview the browser display without hardware
 
-## Live Radar Display
+1. Open [`radar display monitor.html`](./radar%20display%20monitor.html) in Chrome or Edge.
+2. The page starts in simulation mode and animates simulated objects.
+3. Try the range and speed controls and the Pause/Resume button. These controls affect the browser simulation; they do not reconfigure the ESP32 firmware.
 
-This project includes a file called `radar_display.html` — a visual radar monitor you can open directly in your browser. It works in two modes:
+### 2. Assemble and upload the hardware firmware
 
-**Simulation mode (no hardware needed)**
-Just open `radar_display.html` in Google Chrome or Microsoft Edge. The radar will run automatically with simulated objects so you can preview what the display looks like before building anything.
+1. Build the wiring from the table above, including the ECHO level shifter and common ground.
+2. Install ESP32 board support and the ESP32Servo library in Arduino IDE.
+3. The repository sketch is named `radar esp32 .ino`, which does not follow the usual Arduino sketch-folder naming convention. Create a folder named `radar_esp32`, copy the source into it, and name the copy `radar_esp32.ino`.
+4. Open `radar_esp32/radar_esp32.ino`, select the correct ESP32 board and serial port, then upload.
+5. Open Serial Monitor at **115200 baud** and confirm that angle/distance records are emitted as the servo sweeps.
 
-**Live mode (with real ESP32)**
-Once your ESP32 is wired and the sketch is uploaded, connect it via USB and click the Connect ESP32 button inside the page. Select the correct COM port and the radar will switch to live data from your real hardware in real time.
+### 3. Connect the live browser view
 
-> Web Serial only works in Google Chrome or Microsoft Edge. It does not work in Firefox or Safari.
+1. Close Serial Monitor or any other application that currently owns the ESP32 serial port.
+2. Open the browser display page and click **Connect ESP32**.
+3. Select the ESP32 serial port and approve the browser's access prompt.
+4. The page expects lines in the format `ANGLE:90,DIST:45` at 115200 baud. Disconnect/reload the page to recover if the serial reader exits or the device is unplugged.
 
----
+## Firmware behavior
 
-## How a Visitor Uses This Project
+- The servo is commanded from 0° to 180° in 1° steps, with a short settling delay before each distance reading.
+- The distance formula in the source is approximately `duration × 0.034 / 2` centimeters.
+- If no echo is received within 30 ms, the firmware reports the configured fallback of 200 cm.
+- The buzzer is activated when measured distance is below `DETECT_RANGE` (100 cm in the current source). Frequency and duty cycle are mapped from distance, with an 80 ms tone and a distance-dependent silence interval.
+- The browser page independently draws a simulated or live sweep and generates its own low-volume Web Audio tone when it detects an object. The browser sound is not the same as the physical buzzer output.
 
-If someone downloads or clones this repository, here is the exact order of steps they should follow:
+The example records below are illustrative only, not evidence of a successful hardware test:
 
-**Step 1 — Preview the radar (no hardware required)**
-Open `radar_display.html` in Chrome or Edge. The radar runs in simulation mode immediately with no setup needed. Use the range and speed sliders to explore how the display behaves.
-
-**Step 2 — Gather the hardware**
-Collect all parts listed in the Hardware Required section. Pay attention to the note about using a passive buzzer and powering the servo from an external 5V supply.
-
-**Step 3 — Wire the circuit**
-Follow the Pin Connections table. Double check that the servo VCC goes to an external 5V source, not the ESP32 pin. Share GND between all components and the ESP32.
-
-**Step 4 — Install the Arduino library**
-Open Arduino IDE, go to Tools > Manage Libraries, search for ESP32Servo and install it.
-
-**Step 5 — Upload the code**
-Open `radar_esp32.ino` in Arduino IDE. Select the correct ESP32 board under Tools > Board and the correct port under Tools > Port. Click Upload.
-
-**Step 6 — Verify in Serial Monitor**
-Open Serial Monitor at 115200 baud. You should see lines like `ANGLE:45,DIST:62` scrolling as the servo sweeps. If you see this, everything is working.
-
-**Step 7 — Connect the live radar display**
-Go back to `radar_display.html` in Chrome or Edge. Click Connect ESP32, select the port your ESP32 is on, and the radar will switch from simulation to your live hardware data.
-
----
-
-## Setup Steps
-
-1. Wire all components as shown in the pin connection table.
-2. Power the servo from a dedicated 5V rail, not from the ESP32 pin directly.
-3. Install the ESP32Servo library in Arduino IDE via Library Manager.
-4. Open the radar_esp32.ino file in Arduino IDE.
-5. Select your ESP32 board from Tools > Board.
-6. Select the correct COM port from Tools > Port.
-7. Upload the sketch.
-8. Open Serial Monitor at 115200 baud to view angle and distance data.
-9. Mount the servo and sensor on a flat base with the sensor facing forward.
-
----
-
-## Expected Serial Output
-
-```
+```text
 ANGLE:0,DIST:200
-ANGLE:1,DIST:200
 ANGLE:45,DIST:62
-ANGLE:46,DIST:60
-ANGLE:47,DIST:58
 ANGLE:90,DIST:23
-ANGLE:91,DIST:22
 ```
 
----
+## Controls and limitations
+
+- **Hardware detection range:** set by `DETECT_RANGE` in the firmware. The browser's Range slider changes the display/simulation range and filters live display values; it does not change the firmware constant.
+- **Simulation sweep speed:** the browser Speed slider affects simulation only. The physical servo's sweep rate is determined by the firmware loop and delay calls.
+- **Measurement quality:** HC-SR04 readings can be unreliable for soft, angled, narrow or acoustically absorbent targets, and at very short distances. The 200 cm timeout fallback is not a real measurement.
+- **Sweep timing:** the buzzer routine contains blocking delays, so the servo sweep pauses while tones play.
+- **Mechanical setup:** secure the servo and sensor, keep the sensor's view clear, and avoid forcing the servo against its mechanical stops.
+- **Not a safety device:** do not use this prototype for collision avoidance, security guarantees, medical applications or other safety-critical decisions.
 
 ## Troubleshooting
 
-- If the servo jitters or the ESP32 resets, the servo is drawing too much current. Use a separate 5V power supply for the servo and share only GND with the ESP32.
-- If the buzzer makes no sound, confirm you are using a passive buzzer. Active buzzers will not respond to LEDC PWM frequency changes.
-- If distance readings are always 200 (the fallback maximum), check that TRIG and ECHO pins are wired correctly and that the sensor VCC is connected to 5V not 3.3V.
-- If the sweep is jerky, increase the delay after radarServo.write() to give the servo more time to settle at each angle.
+| Symptom | Checks |
+|---|---|
+| ESP32 resets when the servo moves | Use a suitable separate regulated servo supply and join grounds; check current capacity and wiring. |
+| Risk of GPIO damage / erratic ECHO readings | Verify the HC-SR04 ECHO line passes through a divider or level shifter before GPIO 18. |
+| Distance stays at 200 cm | Check sensor 5 V/GND, TRIG GPIO 5, ECHO divider and GPIO 18, and the target position. |
+| Servo does not move | Check servo signal on GPIO 13, power, shared ground and library/core compatibility. |
+| Sketch fails to compile around LEDC functions | The source uses the Arduino-ESP32 2.x LEDC API; use a compatible 2.x core or port the sketch to the 3.x API. |
+| Buzzer is silent or only gives one pitch | Confirm GPIO 14 wiring, common ground and that the device is a suitable passive piezo buzzer. |
+| Browser cannot connect | Use Chrome/Edge with Web Serial support, grant port permission, close Serial Monitor, and check that the firmware sends the expected line format. |
+| Live display shows no target beyond the slider range | The page filters live readings against its own Range value; this does not change the firmware's 100 cm buzzer threshold. |
 
----
+## License and maintenance
 
-## Possible Projects
-
-**Intruder Alarm System**
-Mount the radar at a fixed height near a door or window. When any object enters the detection zone, trigger a buzzer alarm and optionally send an alert over Wi-Fi using the ESP32 to a phone or MQTT broker.
-
-**Autonomous Obstacle-Avoiding Robot**
-Replace the fixed mounting with a mobile robot chassis. Use the radar sweep to scan ahead before moving. The robot turns away from the direction where the closest object is detected.
-
-**Parking Sensor Assistant**
-Mount the sensor at the rear of a vehicle or garage wall. As a car reverses toward the wall, the buzzer beeps faster and louder, mimicking commercial parking sensors.
-
-**3D Room Mapper**
-Add a second servo for vertical tilt alongside the horizontal sweep. Log angle-distance pairs over serial and reconstruct a point cloud of the room on a computer using Python or Processing.
-
-**Security Perimeter Monitor**
-Use multiple ESP32 radar units placed around a perimeter, all reporting to a central MQTT server. A dashboard shows which unit detected motion and at what distance.
-
-**Wildlife or Pet Motion Tracker**
-Set detection sensitivity to a wider range and log timestamped detections to an SD card module. Review movement patterns over time to study animal activity in a yard or farm area.
-
-**Interactive Art Installation**
-Drive LED strips in addition to the buzzer. Map distance to LED color and brightness so the display reacts in real time as people walk past or interact with the installation.
-
----
-
-## License
-
-This project is released for open use. No restrictions apply.
-
-
----
-
-## Skills & technologies
-
-[![C++](https://img.shields.io/badge/C%2B%2B-00599C?logo=cplusplus&logoColor=white)](https://github.com/NirmalyaLenka/radar-using-ultrasonic-sensor) · [![HTML5](https://img.shields.io/badge/HTML5-E34F26?logo=html5&logoColor=white)](https://github.com/NirmalyaLenka/radar-using-ultrasonic-sensor)
-
-
-## Repository structure
-
-Key files and folders (not an exhaustive listing):
-
-- `README.md`
-- `radar display monitor.html`
-- `radar esp32 .ino`
-
-
-## Maintenance & Audit
-
-- **Audit date:** 10 November 2026
-- **Documentation status:** README reviewed and audit record added on this date.
-- **Scope and evidence:** This entry records a documentation-level maintenance pass. It does not by itself establish that source code compiles, dependencies are current, security has been tested, or hardware/runtime behavior has been verified.
-- **Code and tests:** No new functional code changes or test results are claimed by this README update. Run the project-specific build, test, and hardware/runtime checks before relying on it.
-- **Maintenance baseline:** Documentation status recorded through 10 November 2026; revisit dependencies, setup instructions, known limitations, and tests whenever the project changes.
+- **License:** no `LICENSE` file is present, so reuse and redistribution terms are not formally declared. Add a license file if you want to grant explicit permissions.
+- **Verification:** source and documentation review only for this pass. Firmware compilation, browser-to-device serial connection and physical hardware behavior have not been verified.
+- **Last updated:** 11 November 2026 — corrected actual filenames, setup instructions, ESP32 ECHO voltage safety, power guidance and firmware/browser limitations.
+- **Maintenance:** update the pin table, voltage protection, BOM and core/library compatibility notes whenever wiring or firmware changes.
